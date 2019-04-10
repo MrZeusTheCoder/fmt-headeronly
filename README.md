@@ -7,5 +7,5 @@ A striped version of fmt that only contains `fmt/format.h` and the files it depe
 `#include "fmt/format.h"`
 
 <br><br><br><br>
-<sub><h6>Your welcome, Half. :)</h6></sub>
+<h6><sub>Your welcome, Half. :)</sub></h6>
 
