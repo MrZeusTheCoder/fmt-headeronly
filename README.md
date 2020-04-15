@@ -21,6 +21,13 @@ Make it yourself. All you have to do is clone [`{fmt}`](https://github.com/fmtli
 
 :), simple.
 
+<br>
+
+### Disclaimers:
+
+1. `{fmt}` has built-in functionality to be header only. My code simply forces this functionality into the *ON* position.
+2. `{fmt}` requires all distributed modifications of its code to hold the same licence as it. This licence can be seen in the `LICENSE` file.
+
 <br><br><br><br><br><br><br><br><br><br><br><br>
-<h6><sub>Your welcome, Half, undefined, and Bloo!</sub></h6>
+<h6><sub>Your welcome, counter, undefined, and Bloo!</sub></h6>
 
