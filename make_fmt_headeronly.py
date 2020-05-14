@@ -36,8 +36,6 @@ if __name__ == "__main__":
     if(not sys.argv[1].endswith("/")):
         sys.argv[1] += "/"
     
-    print(">>>Remember to checkout to the proper branch/tag before running this script!<<<")
-    
     os.chdir(sys.argv[1])
 
     if(os.path.exists(sys.argv[1] + "include/fmt/")):
