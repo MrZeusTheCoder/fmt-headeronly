@@ -24,7 +24,7 @@
 #include <vector>
 
 // The fmt library version in the form major * 10000 + minor * 100 + patch.
-#define FMT_VERSION 60202
+#define FMT_VERSION 70001
 
 #ifdef __clang__
 #  define FMT_CLANG_VERSION (__clang_major__ * 100 + __clang_minor__)
@@ -176,10 +176,10 @@
 #endif
 
 #ifndef FMT_INLINE
-#  if FMT_GCC_VERSION && FMT_USE_CONSTEXPR
+#  if FMT_GCC_VERSION || FMT_CLANG_VERSION
 #    define FMT_INLINE inline __attribute__((always_inline))
 #  else
-#    define FMT_INLINE
+#    define FMT_INLINE inline
 #  endif
 #endif
 
@@ -194,12 +194,12 @@
 #    define FMT_INLINE_NAMESPACE namespace
 #    define FMT_END_NAMESPACE \
       }                       \
-      using namespace v6;     \
+      using namespace v7;     \
       }
 #  endif
 #  define FMT_BEGIN_NAMESPACE \
     namespace fmt {           \
-    FMT_INLINE_NAMESPACE v6 {
+    FMT_INLINE_NAMESPACE v7 {
 #endif
 
 #if !defined(FMT_HEADER_ONLY) && defined(_WIN32)
@@ -207,6 +207,7 @@
 #  ifdef FMT_EXPORT
 #    define FMT_API __declspec(dllexport)
 #    define FMT_EXTERN_TEMPLATE_API FMT_API
+#    define FMT_EXPORTED
 #  elif defined(FMT_SHARED)
 #    define FMT_API __declspec(dllimport)
 #    define FMT_EXTERN_TEMPLATE_API FMT_API
@@ -215,13 +216,7 @@
 #  define FMT_CLASS_API
 #endif
 #ifndef FMT_API
-#  if FMT_GCC_VERSION || FMT_CLANG_VERSION
-#    define FMT_API __attribute__((visibility("default")))
-#    define FMT_EXTERN_TEMPLATE_API FMT_API
-#    define FMT_INSTANTIATION_DEF_API
-#  else
-#    define FMT_API
-#  endif
+#  define FMT_API
 #endif
 #ifndef FMT_EXTERN_TEMPLATE_API
 #  define FMT_EXTERN_TEMPLATE_API
@@ -284,9 +279,6 @@ namespace detail {
 // warnings.
 template <typename T> constexpr T const_check(T value) { return value; }
 
-// A workaround for gcc 4.8 to make void_t work in a SFINAE context.
-template <typename... Ts> struct void_t_impl { using type = void; };
-
 FMT_NORETURN FMT_API void assert_fail(const char* file, int line,
                                       const char* message);
 
@@ -346,10 +338,9 @@ enum char8_type : unsigned char {};
 #endif
 }  // namespace detail
 
+#ifdef FMT_USE_INTERNAL
 namespace internal = detail;  // DEPRECATED
-
-template <typename... Ts>
-using void_t = typename detail::void_t_impl<Ts...>::type;
+#endif
 
 /**
   An implementation of ``std::basic_string_view`` for pre-C++17. It provides a
@@ -493,7 +484,7 @@ inline basic_string_view<Char> to_string_view(detail::std_string_view<Char> s) {
 }
 
 // A base class for compile-time strings. It is defined in the fmt namespace to
-// make formatting functions visible via ADL, e.g. format(fmt("{}"), 42).
+// make formatting functions visible via ADL, e.g. format(FMT_STRING("{}"), 42).
 struct compile_string {};
 
 template <typename S>
@@ -506,7 +497,7 @@ constexpr basic_string_view<typename S::char_type> to_string_view(const S& s) {
 
 namespace detail {
 void to_string_view(...);
-using fmt::v6::to_string_view;
+using fmt::v7::to_string_view;
 
 // Specifies whether S is a string type convertible to fmt::basic_string_view.
 // It should be a constexpr function but MSVC 2017 fails to compile it in
@@ -633,7 +624,12 @@ using has_formatter =
 
 namespace detail {
 
-/** A contiguous memory buffer with an optional growing ability. */
+/**
+  \rst
+  A contiguous memory buffer with an optional growing ability. It is an internal
+  class and shouldn't be used directly, only via `~fmt::basic_memory_buffer`.
+  \endrst
+ */
 template <typename T> class buffer {
  private:
   T* ptr_;
@@ -1162,9 +1158,8 @@ template <typename Context> class basic_format_arg {
   \endrst
  */
 template <typename Visitor, typename Context>
-FMT_CONSTEXPR auto visit_format_arg(Visitor&& vis,
-                                    const basic_format_arg<Context>& arg)
-    -> decltype(vis(0)) {
+FMT_CONSTEXPR_DECL FMT_INLINE auto visit_format_arg(
+    Visitor&& vis, const basic_format_arg<Context>& arg) -> decltype(vis(0)) {
   using char_type = typename Context::char_type;
   switch (arg.type_) {
   case detail::type::none_type:
@@ -1210,7 +1205,27 @@ FMT_CONSTEXPR auto visit_format_arg(Visitor&& vis,
   return vis(monostate());
 }
 
+// Checks whether T is a container with contiguous storage.
+template <typename T> struct is_contiguous : std::false_type {};
+template <typename Char>
+struct is_contiguous<std::basic_string<Char>> : std::true_type {};
+template <typename Char>
+struct is_contiguous<detail::buffer<Char>> : std::true_type {};
+
 namespace detail {
+
+template <typename OutputIt>
+struct is_back_insert_iterator : std::false_type {};
+template <typename Container>
+struct is_back_insert_iterator<std::back_insert_iterator<Container>>
+    : std::true_type {};
+
+template <typename OutputIt>
+struct is_contiguous_back_insert_iterator : std::false_type {};
+template <typename Container>
+struct is_contiguous_back_insert_iterator<std::back_insert_iterator<Container>>
+    : is_contiguous<Container> {};
+
 // A type-erased reference to an std::locale to avoid heavy <locale> include.
 class locale_ref {
  private:
@@ -1327,10 +1342,9 @@ template <typename OutputIt, typename Char> class basic_format_context {
       : out_(out), args_(ctx_args), loc_(loc) {}
 
   format_arg arg(int id) const { return args_.get(id); }
-
-  // Checks if manual indexing is used and returns the argument with the
-  // specified name.
   format_arg arg(basic_string_view<char_type> name) { return args_.get(name); }
+  int arg_id(basic_string_view<char_type> name) { return args_.get_id(name); }
+  const basic_format_args<basic_format_context>& args() const { return args_; }
 
   detail::error_handler error_handler() { return {}; }
   void on_error(const char* message) { error_handler().on_error(message); }
@@ -1339,7 +1353,9 @@ template <typename OutputIt, typename Char> class basic_format_context {
   iterator out() { return out_; }
 
   // Advances the begin iterator to ``it``.
-  void advance_to(iterator it) { out_ = it; }
+  void advance_to(iterator it) {
+    if (!detail::is_back_insert_iterator<iterator>()) out_ = it;
+  }
 
   detail::locale_ref locale() { return loc_; }
 };
@@ -1349,6 +1365,10 @@ using buffer_context =
     basic_format_context<std::back_insert_iterator<detail::buffer<Char>>, Char>;
 using format_context = buffer_context<char>;
 using wformat_context = buffer_context<wchar_t>;
+
+// Workaround a bug in gcc: https://stackoverflow.com/q/62767544/471164.
+#define FMT_BUFFER_CONTEXT(Char) \
+  basic_format_context<std::back_insert_iterator<detail::buffer<Char>>, Char>
 
 /**
   \rst
@@ -1430,8 +1450,8 @@ inline detail::named_arg<Char, T> arg(const Char* name, const T& arg) {
 
 /**
   \rst
-  A dynamic version of `fmt::format_arg_store<>`.
-  It's equipped with a storage to potentially temporary objects which lifetime
+  A dynamic version of `fmt::format_arg_store`.
+  It's equipped with a storage to potentially temporary objects which lifetimes
   could be shorter than the format arguments object.
 
   It can be implicitly converted into `~fmt::basic_format_args` for passing
@@ -1511,11 +1531,11 @@ class dynamic_format_arg_store
  public:
   /**
     \rst
-    Adds an argument into the dynamic store for later passing to a formating
+    Adds an argument into the dynamic store for later passing to a formatting
     function.
 
-    Note that custom types and string types (but not string views!) are copied
-    into the store with dynamic memory (in addition to resizing vector).
+    Note that custom types and string types (but not string views) are copied
+    into the store dynamically allocating memory if necessary.
 
     **Example**::
 
@@ -1536,10 +1556,11 @@ class dynamic_format_arg_store
   /**
     \rst
     Adds a reference to the argument into the dynamic store for later passing to
-    a formating function. Supports named arguments wrapped in
-    std::reference_wrapper (via std::ref()/std::cref()).
+    a formatting function. Supports named arguments wrapped in
+    ``std::reference_wrapper`` via ``std::ref()``/``std::cref()``.
 
     **Example**::
+
       fmt::dynamic_format_arg_store<fmt::format_context> store;
       char str[] = "1234567890";
       store.push_back(std::cref(str));
@@ -1563,8 +1584,8 @@ class dynamic_format_arg_store
   }
 
   /**
-    Adds named argument into the dynamic store for later passing to a formating
-    function. std::reference_wrapper is supported to avoid copying of the
+    Adds named argument into the dynamic store for later passing to a formatting
+    function. ``std::reference_wrapper`` is supported to avoid copying of the
     argument.
   */
   template <typename T>
@@ -1583,12 +1604,14 @@ class dynamic_format_arg_store
   void clear() {
     data_.clear();
     named_info_.clear();
-    dynamic_args_ = internal::dynamic_arg_list();
+    dynamic_args_ = detail::dynamic_arg_list();
   }
 
   /**
+    \rst
     Reserves space to store at least *new_cap* arguments including
     *new_cap_named* named arguments.
+    \endrst
   */
   void reserve(size_t new_cap, size_t new_cap_named) {
     FMT_ASSERT(new_cap >= new_cap_named,
@@ -1691,13 +1714,18 @@ template <typename Context> class basic_format_args {
   }
 
   template <typename Char> format_arg get(basic_string_view<Char> name) const {
+    int id = get_id(name);
+    return id >= 0 ? get(id) : format_arg();
+  }
+
+  template <typename Char> int get_id(basic_string_view<Char> name) const {
     if (!has_named_args()) return {};
     const auto& named_args =
         (is_packed() ? values_[-1] : args_[-1].value_).named_args;
     for (size_t i = 0; i < named_args.size; ++i) {
-      if (named_args.data[i].name == name) return get(named_args.data[i].id);
+      if (named_args.data[i].name == name) return named_args.data[i].id;
     }
-    return {};
+    return -1;
   }
 
   int max_size() const {
@@ -1717,29 +1745,15 @@ struct wformat_args : basic_format_args<wformat_context> {
   using basic_format_args::basic_format_args;
 };
 
-template <typename Container> struct is_contiguous : std::false_type {};
-
-template <typename Char>
-struct is_contiguous<std::basic_string<Char>> : std::true_type {};
-
-template <typename Char>
-struct is_contiguous<detail::buffer<Char>> : std::true_type {};
-
 namespace detail {
-
-template <typename OutputIt>
-struct is_contiguous_back_insert_iterator : std::false_type {};
-template <typename Container>
-struct is_contiguous_back_insert_iterator<std::back_insert_iterator<Container>>
-    : is_contiguous<Container> {};
 
 // Reports a compile-time error if S is not a valid format string.
 template <typename..., typename S, FMT_ENABLE_IF(!is_compile_string<S>::value)>
 FMT_INLINE void check_format_string(const S&) {
 #ifdef FMT_ENFORCE_COMPILE_STRING
   static_assert(is_compile_string<S>::value,
-                "FMT_ENFORCE_COMPILE_STRING requires all format strings to "
-                "utilize FMT_STRING() or fmt().");
+                "FMT_ENFORCE_COMPILE_STRING requires all format strings to use "
+                "FMT_STRING.");
 #endif
 }
 template <typename..., typename S, FMT_ENABLE_IF(is_compile_string<S>::value)>
@@ -1756,15 +1770,17 @@ make_args_checked(const S& format_str,
   return {args...};
 }
 
-template <typename Char>
+template <typename Char, FMT_ENABLE_IF(!std::is_same<Char, char>::value)>
 std::basic_string<Char> vformat(
     basic_string_view<Char> format_str,
     basic_format_args<buffer_context<type_identity_t<Char>>> args);
 
+FMT_API std::string vformat(string_view format_str, format_args args);
+
 template <typename Char>
-typename buffer_context<Char>::iterator vformat_to(
+typename FMT_BUFFER_CONTEXT(Char)::iterator vformat_to(
     buffer<Char>& buf, basic_string_view<Char> format_str,
-    basic_format_args<buffer_context<type_identity_t<Char>>> args);
+    basic_format_args<FMT_BUFFER_CONTEXT(type_identity_t<Char>)> args);
 
 template <typename Char, typename Args,
           FMT_ENABLE_IF(!std::is_same<Char, char>::value)>
